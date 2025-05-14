@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
+	"os"
+	"os/signal"
 	"path"
 	"runtime"
+	"syscall"
 	"time"
 
 	"github.com/gwuhaolin/livego/configure"
@@ -39,7 +43,7 @@ func startHls() *hls.Server {
 	return hlsServer
 }
 
-func startRtmp(stream *rtmp.RtmpStream, hlsServer *hls.Server) {
+func startRtmp(ctx context.Context, stream *rtmp.RtmpStream, hlsServer *hls.Server) {
 	rtmpAddr := configure.Config.GetString("rtmp_addr")
 	isRtmps := configure.Config.GetBool("enable_rtmps")
 
@@ -139,6 +143,7 @@ func init() {
 			return fmt.Sprintf("%s()", f.Function), fmt.Sprintf(" %s:%d", filename, f.Line)
 		},
 	})
+	log.SetLevel(log.DebugLevel)
 }
 
 func main() {
@@ -160,6 +165,18 @@ func main() {
 
 	apps := configure.Applications{}
 	configure.Config.UnmarshalKey("server", &apps)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, os.Interrupt)
+
+	go func() {
+		log.Debug("Waiting for signal kill")
+		<- quit
+		log.Info("Gracefully shutdown!")
+		cancel()
+	} ()
+
 	for _, app := range apps {
 		stream := rtmp.NewRtmpStream()
 		var hlsServer *hls.Server
@@ -173,6 +190,8 @@ func main() {
 			startAPI(stream)
 		}
 
-		startRtmp(stream, hlsServer)
+		go startRtmp(ctx, stream, hlsServer)
 	}
+
+	<- ctx.Done()
 }
